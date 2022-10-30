@@ -900,13 +900,13 @@ Memory 引擎的表数据是**存储在内存**中的，受硬件问题、断电
 - 缺点：
 	- 索引列也是要**占用空间**的
 	- 索引大大提高了查询效率，但**降低了更新的速度**，比如 INSERT、UPDATE、DELETE
-## 2.索引结构
+## 2.索引的数据结构
 索引是在第三层存储引擎层实现的，所以存储引擎的不同，索引也不同。
 ![在这里插入图片描述](https://img-blog.csdnimg.cn/ccc76144e08a47e3a43f6038732d39a5.png)
 索引在不同存储引擎的支持情况：
 ![在这里插入图片描述](https://img-blog.csdnimg.cn/1906d09e67df479abaee21d28b0685d8.png)
-我们平常所说的索引，如果没有特别指明，都是指B+树结构组织的索引。
-## 2.1 B树
+一般索引都默认是B+树索引，后文如果没有特意强调，都指的是B+树索引。
+### 2.1 B树
 ![在这里插入图片描述](https://img-blog.csdnimg.cn/9fde22110eb24cedb1c536795b3a1140.png)
 就是二叉查找树的多叉版。
 注意：B树的分叉是在节点的左右两边的。B树的叶子节点是最下面的空节点
@@ -917,7 +917,7 @@ Memory 引擎的表数据是**存储在内存**中的，受硬件问题、断电
 - 所有子树的高度相同，所以，所有失败节点都在同一层，即图里最下面的空节点
 - 所有非叶节点的关键字是有序的
 
-## 2.2 B+树
+### 2.2 B+树
 ![在这里插入图片描述](https://img-blog.csdnimg.cn/6825fbf24d5d491fbd0631f7a8ca0224.png)
 
 B+树是应对数据库所需而出现的一种B树的变形树。
@@ -935,8 +935,59 @@ B+树有两种查找方式：
 - 从根节点向下查找，只有找到最下面的一个节点，才能找到该节点实际对应的记录。
 - 直接从叶子节点从左往右进行顺序查找
 
-为什么B+树更适合存储数据？
-&emsp;&emsp;首先明确，在B/B+树中，一个节点存放在一个磁盘块中。在B树中，非叶节点存放了该关键字对应的存储地址，而在**B+树中，只有叶子节点才会从存放关键字对应的存储地址**，所以可以使一个磁盘块可以包含更多的关键字，使得B+树的阶更大，树更矮，读取磁盘的次数更少，查找更快。 
+**为什么B+树更适合存储数据？**
+&emsp;&emsp;首先明确，在B/B+树中，一个节点存放在一个磁盘块中。在B树中，非叶节点存放了该关键字对应的存储地址，而在**B+树中，只有叶子节点才会从存放关键字对应的存储地址**，所以可以使一个磁盘块可以包含更多的关键字，使得B+树的阶更大，树更矮，**读取磁盘的次数更少**，查找更快。 
+&emsp;&emsp; **那为什么不使用红黑树或者平衡二叉树来存？** 因为相比于二叉树，B+树的高度更低，搜索效率高
+
+注意：数据库的B+树的叶子节点是双向链表（原版是单向链表）
+
+## 3. 索引的分类
+![在这里插入图片描述](https://img-blog.csdnimg.cn/0aacd124a0484ada93dd1433ec3347f7.png)
+
+在 InnoDB 存储引擎中，根据索引的存储形式，又可以分为以下两种：
+- 聚集索引(Clustered Index)（必须有，而且只能有一个）
+	- **聚集索引的叶子节点保存了具体的主键对应的每一行的数据**
+- 二级索引(Secondary Index)（可以有多个）
+	- **二级索引的叶子节点存放的是对应的主键**
+
+为什么二级索引不存储行数据？
+&emsp;&emsp;因为如果二级索引也存行数据，那就太冗余了。所以二级索引存的是主键的值。
+
+由于聚集索引必须要有，且只能有一个，所以聚集索引存在一个选取规则：
+- 如果存在主键，主键索引就是聚集索引
+- 如果不存在主键，将使用第一个唯一(UNIQUE)索引作为聚集索引
+- 如果表没有主键或没有合适的唯一索引，则 InnoDB 会自动生成一个 rowid 作为隐藏的聚集索引
+
+聚集索引和二级索引如下图所示：
+![在这里插入图片描述](https://img-blog.csdnimg.cn/c776649607fa4ac484225c8ce634f9b2.png)
+
+### 3.1 思考题
+ <font color='red'> 注意：聚集索引和二级索引对应的叶子节点存放的内容需要记住-----聚集索引的叶子节点存放的具体的主键对应的每一行的数据而二级索引存放的是主键的值。这是sql优化的关键！ </font>
+
+1. 以下 SQL 语句，哪个执行效率高？为什么？
+```
+select * from user where id = 10;
+select * from user where name = 'Arm';
+-- 备注：id为主键，name字段创建的有索引
+```
+答：第一条语句，因为第二条需要**回表查询**----先查询二级索引，在通过二级索引的结果得知主键，再根据主键去查询聚集索引得到表的内容。
+
+2. 已知InnoDB 主键索引的 B+Tree 高度，求可以存储的数据量的大小
+
+答：假设一行数据大小为1k，一页中可以存储16行这样的数据。InnoDB 的指针占用6个字节的空间，主键假设为bigint，占用字节数为8.
+
+设n为key的数量：
+
+可得公式：n * 8 + (n + 1) * 6 = 16 * 1024
+
+其中 8 表示 bigint 占用的字节数，n 表示当前节点存储的key的数量，(n + 1) 表示指针数量（比key多一个）。算出n约为1170。
+
+如果树的高度为2，那么他能存储的数据量大概为：1171 * 16 = 18736；
+如果树的高度为3，那么他能存储的数据量大概为：1171 * 1171 * 16 = 21939856。
+
+另外，如果有成千上万的数据，那么就要考虑分表，涉及运维篇知识。
+
+## 4. 索引的操作语法
 # 第六章：Mysql API库
 在使用mysql的库的时候 需要使用链接库：
 ```
@@ -1001,7 +1052,9 @@ if(conn == NULL)
 printf("connect mysql OK! \n");
 ```
 ## 3.  执行sql语句----mysql_query
-当连接处于活动状态时，客户端或许会使用**mysql_query()**或**mysql_real_query()**向服务器发出SQL查询。两者的差别在于，mysql_query()预期的查询为指定的、由Null终结的字符串，而mysql_real_query()预期的是计数字符串。
+mysql_query：只要mysql可以执行的sql语句，都可以用mysql_query执行。
+
+当连接处于活动状态时，可以使用C语言**mysql_query()或mysql_real_query()**向服务器发出SQL查询。两者的差别在于，mysql_query()预期的查询为指定的、由Null终结的字符串，而mysql_real_query()预期的是计数字符串。
 
 int mysql_query(MYSQL *mysql, const char *query)
 
@@ -1010,8 +1063,12 @@ int mysql_real_query(MYSQL *mysql, const char *query, unsigned long length)
 ```cpp
 //执行sql语句
 int ret = mysql_query(conn, "insert into student values (11, '小路')");
-if( ret == 0)
-    printf("成功！\n");
+if( ret != 0)
+{
+    printf("mysql_query 失败！\n");
+    return -1;
+}
+printf("mysql_query 成功！\n");
 ```
 ## 4. 获取结果集----mysql_store_result
 获取结果集就是对数据库进行SELECT、SHOW等获取操作。
@@ -1037,25 +1094,8 @@ if (result == NULL)
 ```
 该函数调用成功，则SQL查询的结果被保存在result中，但我们不清楚有多少条数据。
 
-**所以应使用mysql_fetch_row的方式将结果集中的数据逐条取出**:
+**获取列数、获取行数：**
 
-**函数原型：**
-- MYSQL_ROW mysql_fetch_row(MYSQL_RES *result)
-
-**返回值：**
-- 成功返回下一行的MYSQL_ROW结构。
-- 如果没有更多要检索的行或出现了错误，返回NULL。
-
-```
-MYSQL_ROW row = NULL;				//typedef char **MYSQL_ROW;	
-while ((row = mysql_fetch_row(result))) 
-{
-	printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", 
-	row[0],row[1],row[2],row[3],row[4],row[5],row[6],row[7]);
-}
-
-```
-**获取列数、获取行数**
 查看帮助手册可以看到，有两个函数具备获取列数的功能：
 - unsigned int mysql_field_count(MYSQL *mysql) 			从mysql句柄中获取有多少列。
 - unsigned int mysql_num_fields(MYSQL_RES *result) 		从返回的结果集中获取有多少列。
@@ -1066,6 +1106,17 @@ int rows = mysql_num_rows(result);
 //获取行的个数
 int fields = mysql_num_fields(result);
 ```
+
+**接着使用mysql_fetch_row的方式将结果集中的数据逐条取出**:
+
+**函数原型：**
+- MYSQL_ROW mysql_fetch_row(MYSQL_RES *result)
+
+**返回值：**
+- 成功返回下一行的MYSQL_ROW结构。
+- 如果没有更多要检索的行或出现了错误，返回NULL。
+
+
 示例：
 ```cpp
 //获取结果集
@@ -1119,4 +1170,258 @@ printf("\n");
 - 成功释放参数传递的结果集。没有失败情况。
 ```cpp
 mysql_free_result(result);
+```
+# mysql客户端的开发
+## 1. 代码开发思路
+```
+mysql客户端编写思路分析:
+1 mysql初始化--mysql_init
+2 连接mysql数据库---mysql_real_connect
+3 while(1)
+  {
+  	//打印提示符:write(STDOUT_FILENO, "mysql >", strlen("mysql >"));
+  	//读取用户输入: read(STDIN_FILENO, buf, sizeof(buf))
+  	//判断用户输入的是否为退出: QUIT quit exit EXIT
+  	if(strncasecmp(buf, "exit", 4)==0 || strncasecmp(buf, "quit", 4)==0)
+  	{
+  		//关闭连接---mysql_close();
+  		exit();
+  	}
+  	
+  	//执行sql语句--mysql_query();
+  	
+  	//若不是select查询, 打印执行sql语句影响的行数--mysql_affected_rows();
+  	if(strncasecmp(buf, "select", 6)!=0)
+  	{
+  		printf("Query OK, %d row affected", mysql_affected_rows());
+  		continue;
+  	}
+  	
+  	//若是select查询的情况
+  		---//获取列数: mysql_field_count()
+  	//获取结果集: mysql_store_result()
+  		--获取列数: int mysql_num_fields();
+  	//获取表头信息并打印表头信息:mysql_fetch_fields();
+  		
+  	//循环获取每一行记录并打印: mysql_fetch_row()
+  	//释放结果集: mysql_free_result()
+  	
+  }
+  
+4 关闭连接: mysql_close();
+```
+## 2. C++下的mysql客户端开发
+需求：在C++下，利用mysql API函数，实现一个类mysql的客户端窗口，实现对mysql数据库的操作
+```cpp
+//C++实现mysql客户端开发
+#include <iostream>
+#include <mysql.h>
+#include <string>
+#include <unistd.h>
+using namespace std;
+
+class Mysql
+{
+public:
+    //初始化数据库，连接数据库
+    Mysql(char* ip, char* user, char* password, char* db, int port);
+
+    //增删改操作----update\insert\delete
+    void db_CUD(char * buf);
+
+    //查操作----select
+    void db_select(char * buf);
+
+    //判断是什么语句，然后自动调用相应的操作
+    void execute_sql(char * buf);
+
+    //断开数据库的连接
+    void db_close();
+
+    MYSQL * m_mysql;
+    MYSQL * m_conn;
+    MYSQL_RES * m_result;
+};
+
+//初始化数据库，连接数据库
+Mysql::Mysql(char* ip, char* user, char* password, char* db, int port)
+{
+    //初始化数据库
+    this->m_mysql = mysql_init(NULL);
+    if(this->m_mysql == NULL)
+    {
+        printf("mysql init error \n");
+        exit(-1);
+    }
+
+    //连接数据库
+    this->m_conn = mysql_real_connect(this->m_mysql, ip, user, password, db, port, NULL, 0);
+    if(this->m_conn==NULL)
+    {
+        printf("mysql connect error ! \n");
+        exit(-1);
+    }
+
+    //设置字符集----解决中文问题
+    cout<<"before:"<<mysql_character_set_name(this->m_conn)<<endl;
+    mysql_set_character_set(this->m_conn,"utf8");//设置字符集为 utf8
+    cout<<"after:"<<mysql_character_set_name(this->m_conn)<<endl;
+
+}
+
+//增删改操作----update\insert\delete
+void Mysql::db_CUD(char * buf)
+{
+    int ret = mysql_query(this->m_conn, buf);
+
+    //通过调用mysql_affected_rows()，可发现有多少行已被改变（影响）。
+    if( ret == 0)//mysql_query调用成功
+    {
+        ret = mysql_affected_rows(this->m_conn);
+        cout<<"Query OK, "<< ret <<" rows affected"<<endl;
+        cout<<"Rows matched: "<<ret<<"  Changed: "<<ret<<"  Warnings: 0"<<endl;
+    }
+    else//mysql_query调用失败---sql语句出错
+        cout<<"ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1"<<endl;
+}
+
+//查操作----select
+void Mysql::db_select(char *buf)
+{
+    int ret = mysql_query(this->m_conn, buf);
+    if(ret != 0)
+        cout<<"mysql_query--select失败！"<<endl;
+    else
+    {
+        //获取数据集
+        this->m_result = mysql_store_result(this->m_conn);
+
+        //获取失败
+        if( this->m_result == NULL)
+        {
+            cout<<"mysql_store_result error";
+            return;
+        }
+
+        //获取成功
+        else
+        {
+            //获取列数
+            int row_num = mysql_num_fields(this->m_result);
+
+            //打印表头信息
+            MYSQL_FIELD *fields = NULL;
+            fields = mysql_fetch_fields(this->m_result);	//得到表头的结构体数组
+            cout<<"+----+-----------+------+--------------------+--------+------------+-----------+---------+"<<endl;
+            for(int i=0; i<row_num; ++i)
+            {
+                cout<<fields[i].name<<"\t";
+            }
+            cout<<endl;
+            cout<<"+----+-----------+------+--------------------+--------+------------+-----------+---------+"<<endl;
+
+            //获取结果集每一行记录
+            MYSQL_ROW row;
+            while( row = mysql_fetch_row(this->m_result) )
+            {
+                for (int i=0; i<row_num; i++)
+                {
+                    cout<<row[i]<<"\t";
+                }
+                cout<<endl;
+            }
+            cout<<"+----+-----------+------+--------------------+--------+------------+-----------+---------+"<<endl;
+
+            //释放结果集
+            mysql_free_result(this->m_result);
+        }
+    }
+
+}
+
+//判断是什么语句，然后自动调用相应的操作
+void Mysql::execute_sql(char * buf)
+{
+    //先判断是不是QUIT quit EXIT exit
+    if(strncasecmp(buf, "quit", 4)==0 || strncasecmp(buf, "exit", 4) == 0)
+    {
+        this->db_close();
+    }
+
+    //在判断是增删改还是查
+     else if( strncasecmp(buf, "insert", 6) == 0 || strncasecmp(buf, "update", 6) == 0 || strncasecmp(buf, "delete", 6) == 0)
+     {
+         db_CUD(buf);
+     }
+
+     else if(strncasecmp(buf, "select", 6) == 0)
+     {
+         db_select(buf);
+     }
+
+     //输入错误指令
+     else
+     {
+        cout<<"ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near"<<"\'"<<buf<<"\'at line 1"<<endl;
+     }
+
+}
+
+//关闭连接
+void Mysql::db_close()
+{
+    mysql_close(this->m_conn);
+    cout<<"Bye"<<endl;
+    exit(1);
+}
+
+//处理buf异常情况
+int clean_buf(char * buf)
+{
+    //处理输入回车报错的情况
+    if(buf[0]=='\n')
+        return 1;
+
+    //去掉末尾的;
+    char * p = strrchr(buf, ';');
+    if(p!=NULL)
+        *p = 0x00;
+
+    //去除前面的空格
+    int i;
+    for(i=0; strlen(buf);++i)
+    {
+        if(buf[i]!=' ')//只要前面是空格，指针往前走
+            break;
+    }
+    int n = strlen(buf);
+    memmove(buf, buf+i, n-i+1);//memmove拷贝字符串。+1是因为多拷贝一个\0
+
+    return 0;
+}
+
+int main()
+{
+    char buf[1024];
+    //初始化、连接数据库
+    Mysql mysql=Mysql("localhost", "root", "Aa82981388", "heima", 0);
+    while(1)
+    {
+        //将"mysql"输出到终端
+        write(STDIN_FILENO,"mysql> ",strlen("mysql> "));
+
+        //获取用户输入
+        memset(buf,0x00,sizeof(buf));
+        read(STDOUT_FILENO, buf, sizeof(buf));
+
+        //处理buf异常情况
+        int flag = clean_buf(buf);
+        if(flag==1)
+            continue;
+
+        //判断是什么语句,然后自动执行相应的语句
+        mysql.execute_sql(buf);
+    }
+}
+
 ```
